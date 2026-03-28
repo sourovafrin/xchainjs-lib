@@ -95,15 +95,25 @@ export class BlockbookProvider implements UtxoOnlineDataProvider {
     return this.mapTransactionToTx(rawTx)
   }
 
-  /**
-   * Returns fee rates using Blockbook's estimatefee endpoint.
-   * Block targets: 5 (average), 3 (fast), 1 (fastest).
-   */
+  private static readonly BLOCK_TARGETS: Record<FeeOption, number> = {
+    [FeeOption.Average]: 5,
+    [FeeOption.Fast]: 3,
+    [FeeOption.Fastest]: 1,
+  }
+
+  async getFeeRate(feeOption: FeeOption): Promise<number> {
+    return blockbook.getFeeEstimate({
+      apiKey: this._apiKey,
+      baseUrl: this.baseUrl,
+      numberOfBlocks: BlockbookProvider.BLOCK_TARGETS[feeOption],
+    })
+  }
+
   async getFeeRates(): Promise<FeeRates> {
     const [average, fast, fastest] = await Promise.all([
-      blockbook.getFeeEstimate({ apiKey: this._apiKey, baseUrl: this.baseUrl, numberOfBlocks: 5 }),
-      blockbook.getFeeEstimate({ apiKey: this._apiKey, baseUrl: this.baseUrl, numberOfBlocks: 3 }),
-      blockbook.getFeeEstimate({ apiKey: this._apiKey, baseUrl: this.baseUrl, numberOfBlocks: 1 }),
+      this.getFeeRate(FeeOption.Average),
+      this.getFeeRate(FeeOption.Fast),
+      this.getFeeRate(FeeOption.Fastest),
     ])
     return {
       [FeeOption.Average]: average,
@@ -132,15 +142,20 @@ export class BlockbookProvider implements UtxoOnlineDataProvider {
 
   private async mapUTXOs(utxos: AddressUTXO[]): Promise<UTXO[]> {
     const result: UTXO[] = []
-    for (const [i, utxo] of utxos.entries()) {
-      // Rate-limit: pause between consecutive fetches to avoid overwhelming the node
-      if (i > 0) await new Promise((resolve) => setTimeout(resolve, 500))
+    const txCache = new Map<string, Transaction>()
+    for (const utxo of utxos) {
+      let tx = txCache.get(utxo.txid)
+      if (!tx) {
+        // Rate-limit: pause between consecutive fetches to avoid overwhelming the node
+        if (txCache.size > 0) await new Promise((resolve) => setTimeout(resolve, 500))
 
-      const tx = await blockbook.getTx({
-        apiKey: this._apiKey,
-        baseUrl: this.baseUrl,
-        hash: utxo.txid,
-      })
+        tx = await blockbook.getTx({
+          apiKey: this._apiKey,
+          baseUrl: this.baseUrl,
+          hash: utxo.txid,
+        })
+        txCache.set(utxo.txid, tx)
+      }
 
       const output = tx.vout.find((vout) => vout.n === utxo.vout)
       if (!output?.hex) {
