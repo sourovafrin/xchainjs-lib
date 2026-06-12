@@ -7,9 +7,12 @@ import { addressToScript, memoToScript, writeSigScript } from './script'
 import { Output, OutputMemo, OutputPKH, Tx, UTXO } from './types'
 import { writeCompactInt } from './writer'
 
-// NU6.1 Consensus Branch ID - activated November 24, 2025 at block height 3146400
-// See ZIP 255: https://zips.z.cash/zip-0255
-const NU6_1_CONSENSUS_BRANCH_ID = 0x4dec4df0
+// Default Zcash consensus branch ID(NU6.2 currently, activated at block height 3364600 on  June 3, 2026) used when a live value can't be fetched from a node.
+// A transaction's signatures commit to the branch ID of the block it will be mined in
+// (a node reports this as backend.consensus.nextblock); a stale value makes every
+// signature invalid and broadcast fails with HTTP 400. Keep this in sync with the
+// network's active upgrade, but prefer passing the live branch ID into signAndFinalize.
+export const DEFAULT_CONSENSUS_BRANCH_ID = 0x5437f330
 
 // Version Group ID for transaction version 5
 const TX_VERSION_GROUP_ID = 0x26a7270a
@@ -180,16 +183,22 @@ export async function buildTx(
   }
 }
 
-export async function signAndFinalize(height: number, skb: string, utxos: UTXO[], outputs: Output[]): Promise<Buffer> {
+export async function signAndFinalize(
+  height: number,
+  skb: string,
+  utxos: UTXO[],
+  outputs: Output[],
+  consensusBranchId: number = DEFAULT_CONSENSUS_BRANCH_ID,
+): Promise<Buffer> {
   const sk = new Uint8Array(Buffer.from(skb, 'hex'))
   const pk = secp256k1.getPublicKey(sk, true)
   let offset = 0
 
-  // HEADER with NU6.1 consensus branch ID
+  // HEADER with consensus branch ID
   let buf = Buffer.alloc(20)
   buf.writeUInt32LE(TX_VERSION, 0) // Transaction version 5 with overwinter flag
   buf.writeUInt32LE(TX_VERSION_GROUP_ID, 4) // Version group ID
-  buf.writeUInt32LE(NU6_1_CONSENSUS_BRANCH_ID, 8) // NU6.1 consensus branch ID (FIXED!)
+  buf.writeUInt32LE(consensusBranchId, 8) // Consensus branch ID
   buf.writeUInt32LE(0x00000000, 12) // Lock time
   buf.writeUInt32LE(height, 16) // Expiry height
 
@@ -309,10 +318,10 @@ export async function signAndFinalize(height: number, skb: string, utxos: UTXO[]
     Buffer.from('9fbe4ed13b0c08e671c11a3407d84e1117cd45028a2eee1b9feae78b48a6e2c1', 'hex').copy(buf, offset)
     offset += 32
 
-    // Create personalization with NU6.1 branch ID
+    // Create personalization with the consensus branch ID
     const personal = Buffer.alloc(16)
     Buffer.from('ZcashTxHash_').copy(personal)
-    personal.writeUInt32LE(NU6_1_CONSENSUS_BRANCH_ID, 12) // NU6.1 consensus branch ID (FIXED!)
+    personal.writeUInt32LE(consensusBranchId, 12) // Consensus branch ID
 
     const sigHash = blake2bWithPersonal(buf, personal)
     const signature = secp256k1.sign(sigHash, sk, { lowS: true, prehash: false })
@@ -346,7 +355,7 @@ export async function signAndFinalize(height: number, skb: string, utxos: UTXO[]
   offset += 4
   buf.writeUInt32LE(TX_VERSION_GROUP_ID, offset) // Version group ID
   offset += 4
-  buf.writeUInt32LE(NU6_1_CONSENSUS_BRANCH_ID, offset) // NU6.1 consensus branch ID (FIXED!)
+  buf.writeUInt32LE(consensusBranchId, offset) // Consensus branch ID
   offset += 4
   buf.writeUInt32LE(0x00000000, offset) // Lock time
   offset += 4
