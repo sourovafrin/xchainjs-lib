@@ -1,5 +1,5 @@
 import * as ecc from '@bitcoin-js/tiny-secp256k1-asmjs'
-import { buildMaxTx, buildTx, signAndFinalize, skToAddr } from '@xchainjs/zcash-js'
+import { DEFAULT_CONSENSUS_BRANCH_ID, buildMaxTx, buildTx, signAndFinalize, skToAddr } from '@xchainjs/zcash-js'
 import { Network, TxHash, checkFeeBounds } from '@xchainjs/xchain-client'
 import { getSeed } from '@xchainjs/xchain-crypto'
 import { Address } from '@xchainjs/xchain-util'
@@ -8,6 +8,7 @@ import { HDKey } from '@scure/bip32'
 import { ECPairFactory, ECPairInterface } from 'ecpair'
 
 import { Client, defaultZECParams } from './client'
+import { ZEC_BLOCKBOOK_URL } from './const'
 import * as Utils from './utils'
 
 const ECPair = ECPairFactory(ecc)
@@ -82,6 +83,33 @@ class ClientKeystore extends Client {
   }
 
   /**
+   * Get the consensus branch ID that transactions must commit to when signing.
+   *
+   * Queries the blockbook backend (`backend.consensus.nextblock`) so the value
+   * tracks Zcash network upgrades automatically. Falls back to the library's
+   * built-in default if the node can't be reached or returns an unexpected shape.
+   *
+   * @returns {Promise<number>} The consensus branch ID as a 32-bit integer.
+   */
+  private async getConsensusBranchId(): Promise<number> {
+    // Only mainnet/stagenet have a configured provider; testnet uses the default.
+    if (this.network === Network.Testnet) return DEFAULT_CONSENSUS_BRANCH_ID
+    try {
+      const response = await fetch(ZEC_BLOCKBOOK_URL, {
+        headers: { 'api-key': process.env.NOWNODES_API_KEY || '' },
+      })
+      const data = (await response.json()) as { backend?: { consensus?: { nextblock?: string } } }
+      const branchHex = data?.backend?.consensus?.nextblock
+      if (typeof branchHex === 'string' && /^[0-9a-fA-F]{1,8}$/.test(branchHex)) {
+        return parseInt(branchHex, 16)
+      }
+    } catch {
+      // Network/parse error — fall back to the built-in default below.
+    }
+    return DEFAULT_CONSENSUS_BRANCH_ID
+  }
+
+  /**
    * Transfer ZEC.
    *
    * @param {TxParams&FeeRate} params The transfer options including the fee rate.
@@ -127,7 +155,14 @@ class ClientKeystore extends Client {
       throw Error('Error getting private key')
     }
 
-    const signedBuffer = await signAndFinalize(0, (zecKeys.privateKey as Buffer).toString('hex'), tx.inputs, tx.outputs)
+    const consensusBranchId = await this.getConsensusBranchId()
+    const signedBuffer = await signAndFinalize(
+      0,
+      (zecKeys.privateKey as Buffer).toString('hex'),
+      tx.inputs,
+      tx.outputs,
+      consensusBranchId,
+    )
 
     const txId = await this.roundRobinBroadcastTx(signedBuffer.toString('hex'))
 
@@ -180,7 +215,14 @@ class ClientKeystore extends Client {
 
     checkFeeBounds(this.feeBounds, tx.fee)
 
-    const signedBuffer = await signAndFinalize(0, (zecKeys.privateKey as Buffer).toString('hex'), tx.inputs, tx.outputs)
+    const consensusBranchId = await this.getConsensusBranchId()
+    const signedBuffer = await signAndFinalize(
+      0,
+      (zecKeys.privateKey as Buffer).toString('hex'),
+      tx.inputs,
+      tx.outputs,
+      consensusBranchId,
+    )
     const hash = await this.roundRobinBroadcastTx(signedBuffer.toString('hex'))
 
     return { hash, maxAmount: tx.maxAmount, fee: tx.fee }

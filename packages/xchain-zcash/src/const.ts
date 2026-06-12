@@ -36,8 +36,12 @@ export const zcashExplorerProviders = {
   [Network.Mainnet]: ZEC_MAINNET_EXPLORER,
 }
 
+// Blockbook base URL. Its root (GET /) reports the live consensus branch ID at
+// backend.consensus.nextblock, which transactions must commit to when signing.
+export const ZEC_BLOCKBOOK_URL = 'https://zecbook.nownodes.io/api/v2'
+
 const mainnetNownodesProvider = new NownodesProvider(
-  'https://zecbook.nownodes.io/api/v2',
+  ZEC_BLOCKBOOK_URL,
   ZECChain,
   AssetZEC,
   ZEC_DECIMAL,
